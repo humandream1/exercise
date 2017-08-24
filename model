@@ -1,0 +1,210 @@
+import tensorflow as tf
+import numpy as np
+from math import pi
+
+sharing_coeff = {'e' : 1, 'm' : 2, 'p4' : 4, 'p4m' : 8, 'p8' : 8, 'p8m' : 16}
+    
+
+def weight_variable(shape, symmetry = 'e') : 
+    if symmetry == 'e' : 
+        return tf.Variable(tf.truncated_normal(shape, stddev=0.1))
+    
+    height, width, input_channel, output_channel = shape
+    d = sharing_coeff[symmetry]
+    if output_channel % d != 0 : 
+        raise ValueError()
+    output_channel = output_channel//d
+    
+    if (symmetry == 'e' or symmetry == 'm') : 
+        e = tf.Variable(tf.truncated_normal([height, width, input_channel, output_channel], stddev=0.1))
+        if symmetry == 'e' : 
+            return e
+        elif symmetry == 'm' : 
+            m = tf.transpose(e,[1,0,2,3])
+            result = tf.concat([e,m], axis=-1)
+            return result
+    
+    elif (symmetry == 'p4' or symmetry == 'p4m') : 
+        e = tf.Variable(tf.truncated_normal([input_channel, height, width, output_channel], stddev=0.1))
+        r = tf.contrib.image.rotate(e, pi/2)
+        r2 = tf.contrib.image.rotate(e, pi)
+        r3 =  tf.contrib.image.rotate(e, pi*3/2)
+        
+        combined = tf.concat([e,r,r2,r3], axis=-1)
+        result = tf.transpose(conbined, [1,2,0,3])
+        if symmetry == 'p4' : 
+            return result
+        elif symmetry == 'p4m' : 
+            reflected_result = tf.transpose(combined, [2,1,0,3])
+            return tf.concat([result, reflected_result], axis = -1)
+        
+    elif (symmetry == 'p8' or symmetry == 'p8m') : 
+        e = tf.Variable(tf.truncated_normal([input_channel, height, width, output_channel], stddev=0.1))
+        r = tf.contrib.image.rotate(e, pi/4)
+        r2 = tf.contrib.image.rotate(e, pi/2)
+        r3 = tf.contrib.image.rotate(e, pi*3/4)
+        r4 = tf.contrib.image.rotate(e, pi)
+        r5 = tf.contrib.image.rotate(e, pi*5/4)
+        r6 = tf.contrib.image.rotate(e, pi*6/4)
+        r7 = tf.contrib.image.rotate(e, pi*7/4)
+        
+        combined = tf.concat([e,r,r2,r3,r4,r5,r6,r7], axis=-1)
+        result = tf.transpose(conbined, [1,2,0,3])
+        if symmetry == 'p8' : 
+            return result
+        elif symmetry == 'p8m' : 
+            reflected_result = tf.transpose(combined, [2,1,0,3])
+            return tf.concat([result, reflected_result], axis = -1)    
+    
+    
+    else : 
+        raise ValueError()
+        
+
+    
+    
+def bias_variable(shape, symmetry='e') :
+    width = shape[-1]
+    d = sharing_coeff[symmetry]
+    
+    if width%d != 0 : 
+        raise ValueError()
+    width = width//d
+
+    if d == 1 : 
+        return tf.Variable(tf.constant(0.1, shape=shape))
+    else : 
+        e = tf.Variable(tf.constant(0.1, shape=[width]))
+        result = tf.concat([e for _ in range(d)], axis=-1)
+        return result        
+    
+   
+
+def bias_variable_p4(shape):
+    l = shape[-1]
+    if l%4 != 0 or len(shape) != 1 : 
+        raise ValueError()
+    e = tf.Variable(tf.constant(0.1, shape = [l//4]))
+    result = tf.concat([e,e,e,e], axis=0)
+    return result
+
+def conv2d(x, W):
+    return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME')
+
+def max_pool_2x2(x):
+    return tf.nn.max_pool(x, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
+
+def conv3x3(x, width1, width2) : 
+    W = weight_variable([3,3,width1,width2])
+    b = bias_variable([width2])
+    return tf.nn.relu(conv2d(x, W) + b)
+
+def BN(x) : 
+    return tf.layers.batch_normalization(x)
+
+def basicblock(x, width, symmetry) : 
+    l, v, h, f = x.get_shape().as_list()
+    
+    W1 = weight_variable([3, 3, f, width], symmetry = symmetry)
+    b1 = bias_variable([width], symmetry = symmetry)
+    W2 = weight_variable([3, 3, width, width], symmetry = symmetry)
+    b2 = bias_variable([width], symmetry = symmetry)
+    
+    x = conv2d(x, W1) + b1
+    x = BN(x)
+    x = tf.nn.relu(x)
+    
+    x = conv2d(x, W2) + b2
+    x = BN(x)
+    return x
+'''
+def fc(x) : 
+    l, v, h, f = x.get_shape().as_list()
+    n1 = v*h*f
+    n2 = 1024
+        
+    W1 = weight_variable([n1,n2])
+    b1 = bias_variable([n2])
+    W2 = weight_variable([n2,10])
+    b2 = bias_variable([10])
+    
+    x = tf.reshape(x, [-1, n1])
+    x = tf.nn.relu(tf.matmul(x,W1)+b1)
+    x = tf.matmul(x,W2)+b2
+    return x'''
+
+def fc(x) : 
+    l, w = x.get_shape().as_list()
+    n1 = w
+    n2 = int((w*10)**.5)
+    n3 = 10
+        
+    W1 = weight_variable([n1,n2])
+    b1 = bias_variable([n2])
+    W2 = weight_variable([n2,n3])
+    b2 = bias_variable([n3])
+    
+    x = tf.nn.relu(tf.matmul(x,W1)+b1)
+    x = tf.matmul(x,W2)+b2
+    return x
+
+def wideResNet(x, symmetry, width_factor, depth_factor) : 
+    w0 = 3
+    w1 = width_factor*16
+    w2 = width_factor*32
+    w3 = width_factor*64
+    
+    x = conv3x3(x,3,w1) 
+    for i in range(depth_factor) : 
+        x = x + basicblock(x, w1, symmetry)
+        x = tf.nn.relu(x)  # (l, 32, 32, w1)
+        
+        
+    x = max_pool_2x2(x)
+    x = conv3x3(x, w1, w2)
+    for i in range(depth_factor) : 
+        x = x + basicblock(x, w2, symmetry)
+        x = tf.nn.relu(x)  # (l, 16, 16, w2)
+    
+    mid = x
+        
+    x = max_pool_2x2(x)
+    x = conv3x3(x, w2, w3)
+    for i in range(depth_factor) : 
+        x = x + basicblock(x, w3, symmetry)
+        x = tf.nn.relu(x)  # (l, 8, 8, w3)    
+        
+        
+    x = tf.reduce_mean(x, axis=[1,2]) # (l, w3)
+    x = fc(x) # (l, 10)
+    return x, mid
+
+
+
+'''
+
+W_conv1 = weight_variable([5, 5, 3, 32])
+b_conv1 = bias_variable([32])
+
+h_conv1 = tf.nn.relu(conv2d(x, W_conv1) + b_conv1) # (l, 32, 32, 32)
+h_pool1 = max_pool_2x2(h_conv1) # (l, 16, 16, 32)
+
+W_conv2 = weight_variable([5, 5, 32, 64]) 
+b_conv2 = bias_variable([64]) 
+
+h_conv2 = tf.nn.relu(conv2d(h_pool1, W_conv2) + b_conv2) # (l, 16, 16, 64)
+h_pool2 = max_pool_2x2(h_conv2) # (l, 8, 8, 64)
+
+W_fc1 = weight_variable([8 * 8 * 64, 1024])
+b_fc1 = bias_variable([1024])
+
+h_pool2_flat = tf.reshape(h_pool2, [-1, 8*8*64]) # (l, 8*8*64)
+h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, W_fc1) + b_fc1) # (l, 1024)
+
+keep_prob = tf.placeholder("float")
+h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
+
+W_fc2 = weight_variable([1024, 10])
+b_fc2 = bias_variable([10])
+
+pred = tf.matmul(h_fc1_drop, W_fc2) + b_fc2'''
